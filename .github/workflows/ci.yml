@@ -1,0 +1,123 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test Application
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Create environment file
+      run: |
+        cat > .env << EOF
+        POSTGRES_USER=postgres
+        POSTGRES_PASSWORD=testpass
+        POSTGRES_DB=testdb
+        DATABASE_URL=postgresql+psycopg://postgres:testpass@db:5432/testdb
+        REDIS_HOST=redis
+        API_URL=http://localhost
+        EOF
+
+    - name: Build and start services
+      run: |
+        docker compose up -d --build
+
+    - name: Wait for services to be ready
+      run: |
+        sleep 30
+        docker compose exec -T api python -c "
+        import requests
+        import time
+        for i in range(30):
+            try:
+                r = requests.get('http://localhost:8000/health')
+                if r.status_code == 200:
+                    print('API is ready')
+                    break
+            except:
+                pass
+            time.sleep(2)
+        else:
+            raise Exception('API not ready')
+        "
+
+    - name: Run tests
+      run: |
+        # Test health endpoint
+        curl -f http://localhost/health
+        
+        # Test API endpoints
+        docker compose exec -T api python -c "
+        import requests
+        
+        # Health check
+        r = requests.get('http://localhost:8000/health')
+        assert r.status_code == 200
+        assert r.json()['status'] == 'ok'
+        print('✓ Health check passed')
+        
+        # Create user
+        user_data = {'email': 'test@example.com', 'name': 'Test User'}
+        r = requests.post('http://localhost:8000/users', json=user_data)
+        assert r.status_code == 201
+        print('✓ User creation passed')
+        
+        # Get users
+        r = requests.get('http://localhost:8000/users')
+        assert r.status_code == 200
+        print('✓ Get users passed')
+        
+        # Test counter
+        r = requests.post('http://localhost:8000/counter')
+        assert r.status_code == 200
+        assert 'hits' in r.json()
+        print('✓ Counter test passed')
+        
+        print('All tests passed!')
+        "
+
+    - name: Show logs on failure
+      if: failure()
+      run: |
+        docker compose logs
+
+    - name: Cleanup
+      if: always()
+      run: |
+        docker compose down -v
+
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: |
+        docker build -t docker-e2e-app:latest .
+        echo "Docker image built successfully"
+
+    - name: Security scan
+      run: |
+        # Install trivy
+        sudo apt-get update
+        sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install trivy -y
+        
+        # Scan image
+        trivy image --exit-code 0 --severity HIGH,CRITICAL docker-e2e-app:latest
