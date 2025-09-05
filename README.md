@@ -368,7 +368,9 @@ The project follows Python PEP 8 style guidelines. Consider using tools like `bl
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2024 Purna Chandra Reddy Peddasura
 
 ## Acknowledgments
 
